@@ -64,6 +64,18 @@ def manager_init() -> None:
     ("DynamicLaneProfile", "1"),
     ("EnableMads", "1"),
     ("EnhancedScc", "0"),
+    
+    # Forward Collision Detection Parameters
+    ("EarlyDetectionConfidence", "60"),
+    ("ModerateDetectionConfidence", "75"),
+    ("AggressiveDetectionConfidence", "90"),
+    ("EarlyDetectionDistance", "80"),
+    ("ModerateDetectionDistance", "50"),
+    ("CloseDetectionDistance", "25"),
+    ("GentleDecelRate", "0.5"),
+    ("ModerateDecelRate", "1.5"),
+    ("AggressiveDecelRate", "3.0"),
+    
     ("FeatureStatus", "1"),
     ("HandsOnWheelMonitoring", "0"),
     ("HideVEgoUi", "0"),
@@ -140,7 +152,7 @@ def manager_init() -> None:
   params.put("GitCommit", build_metadata.openpilot.git_commit)
   params.put("GitCommitDate", build_metadata.openpilot.git_commit_date)
   params.put("GitBranch", build_metadata.channel)
-  params.put("GitRemote", build_metadata.openpilot.git_origin)
+  params.put("GitRemote", build_metadata.openpilot.git_normalized_origin)
   params.put_bool("IsTestedBranch", build_metadata.tested_channel)
   params.put_bool("IsReleaseBranch", build_metadata.release_channel)
   params.put_bool("IsReleaseSPBranch", build_metadata.release_sp_channel)
