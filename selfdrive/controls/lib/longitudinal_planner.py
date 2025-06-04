@@ -107,6 +107,7 @@ class LongitudinalPlanner:
     if self.param_read_counter % 50 == 0:
       self.read_param()
     self.param_read_counter += 1
+
     if self.dynamic_experimental_controller.is_enabled() and sm['controlsState'].experimentalMode:
       self.mpc.mode = self.dynamic_experimental_controller.get_mpc_mode(self.CP.radarUnavailable, sm['carState'], sm['radarState'].leadOne, sm['modelV2'], sm['controlsState'], sm['navInstruction'].maneuverDistance)
     else:
@@ -149,6 +150,60 @@ class LongitudinalPlanner:
     v_cruise = self.cruise_solutions(
       not reset_state and (self.CP.openpilotLongitudinalControl or not self.CP.pcmCruiseSpeed),
       self.v_desired_filter.x, self.a_desired, v_cruise, sm)
+
+    # Check for graduated forward collision detection and adjust acceleration limits
+    lead_one = sm['radarState'].leadOne
+    if lead_one.status and hasattr(lead_one, 'modelProb'):
+      # Import here to avoid circular imports
+      from openpilot.common.params import Params
+      params = Params()
+      
+      # Get user-configurable deceleration rates with safe defaults
+      try:
+        gentle_decel = -abs(float(params.get("GentleDecelRate", encoding="utf8") or "0.5"))
+        moderate_decel = -abs(float(params.get("ModerateDecelRate", encoding="utf8") or "1.5"))
+        aggressive_decel = -abs(float(params.get("AggressiveDecelRate", encoding="utf8") or "3.0"))
+      except (ValueError, TypeError):
+        gentle_decel = -0.5
+        moderate_decel = -1.5
+        aggressive_decel = -3.0
+      
+      # Clamp deceleration values to safe ranges
+      gentle_decel = max(-1.0, min(-0.3, gentle_decel))
+      moderate_decel = max(-2.5, min(-1.0, moderate_decel))
+      aggressive_decel = max(-4.0, min(-2.0, aggressive_decel))
+      
+      # Get confidence thresholds
+      try:
+        early_confidence = float(params.get("EarlyDetectionConfidence", encoding="utf8") or "60") / 100.0
+        moderate_confidence = float(params.get("ModerateDetectionConfidence", encoding="utf8") or "75") / 100.0
+      except (ValueError, TypeError):
+        early_confidence = 0.60
+        moderate_confidence = 0.75
+      
+      # Apply graduated deceleration based on detection confidence and conditions
+      if (v_ego > 6.7 and  # Going > 15 mph
+          abs(lead_one.vLead) < 0.9 and  # Lead car essentially stopped
+          lead_one.dRel > 25.0):  # At reasonable distance
+        
+        if early_confidence <= lead_one.modelProb < moderate_confidence:
+          # Early detection: gentle deceleration
+          accel_limits[0] = max(accel_limits[0], gentle_decel)
+          accel_limits_turns[0] = max(accel_limits_turns[0], gentle_decel)
+        elif lead_one.modelProb >= moderate_confidence:
+          # Moderate to high confidence: progressive deceleration
+          if lead_one.dRel > 50.0:
+            # Far away: gentle deceleration
+            accel_limits[0] = max(accel_limits[0], gentle_decel)
+            accel_limits_turns[0] = max(accel_limits_turns[0], gentle_decel)
+          elif lead_one.dRel > 30.0:
+            # Medium distance: moderate deceleration  
+            accel_limits[0] = max(accel_limits[0], moderate_decel)
+            accel_limits_turns[0] = max(accel_limits_turns[0], moderate_decel)
+          else:
+            # Close distance: standard aggressive deceleration
+            accel_limits[0] = max(accel_limits[0], aggressive_decel)
+            accel_limits_turns[0] = max(accel_limits_turns[0], aggressive_decel)
 
     # clip limits, cannot init MPC outside of bounds
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)

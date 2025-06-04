@@ -92,7 +92,7 @@ class Track:
     self.aLeadK = aLeadK
     self.aLeadTau = aLeadTau
 
-  def get_RadarState(self, CP: car.CarParams = None, lead_msg_y: float = 0.0, model_prob: float = 0.0):
+  def get_RadarState(self, CP: car.CarParams = None, lead_msg_y: float = 0.0, model_prob: float = 0.0, v_ego: float = 0.0):
     y_rel_vision = False if CP is None or CP.carName != "hyundai" else CP.spFlags & HyundaiFlagsSP.SP_CAMERA_SCC_LEAD
     return {
       "dRel": float(self.dRel),
@@ -103,7 +103,7 @@ class Track:
       "aLeadK": float(self.aLeadK),
       "aLeadTau": float(self.aLeadTau),
       "status": True,
-      "fcw": self.is_potential_fcw(model_prob),
+      "fcw": self.is_potential_fcw(model_prob, v_ego),
       "modelProb": model_prob,
       "radar": True,
       "radarTrackId": self.identifier,
@@ -114,8 +114,58 @@ class Track:
     # Radar points closer than 0.75, are almost always glitches on toyota radars
     return abs(self.yRel) < 1.0 and (v_ego < V_EGO_STATIONARY) and (0.75 < self.dRel < 25)
 
-  def is_potential_fcw(self, model_prob: float):
-    return model_prob > .9
+  def is_potential_fcw(self, model_prob: float, v_ego: float = 0.0):
+    # Import here to avoid circular imports
+    from openpilot.common.params import Params
+    params = Params()
+    
+    # Get user-configurable parameters with safe defaults
+    try:
+      early_confidence = float(params.get("EarlyDetectionConfidence", encoding="utf8") or "60") / 100.0
+      moderate_confidence = float(params.get("ModerateDetectionConfidence", encoding="utf8") or "75") / 100.0
+      aggressive_confidence = float(params.get("AggressiveDetectionConfidence", encoding="utf8") or "90") / 100.0
+      
+      early_distance = float(params.get("EarlyDetectionDistance", encoding="utf8") or "80")
+      moderate_distance = float(params.get("ModerateDetectionDistance", encoding="utf8") or "50")
+      close_distance = float(params.get("CloseDetectionDistance", encoding="utf8") or "25")
+    except (ValueError, TypeError):
+      # Fallback to safe defaults if parameters are corrupted
+      early_confidence = 0.60
+      moderate_confidence = 0.75  
+      aggressive_confidence = 0.90
+      early_distance = 80.0
+      moderate_distance = 50.0
+      close_distance = 25.0
+    
+    # Clamp values to safe ranges
+    early_confidence = max(0.4, min(0.8, early_confidence))
+    moderate_confidence = max(0.6, min(0.85, moderate_confidence))
+    aggressive_confidence = max(0.8, min(0.95, aggressive_confidence))
+    
+    early_distance = max(60, min(120, early_distance))
+    moderate_distance = max(30, min(70, moderate_distance))
+    close_distance = max(15, min(35, close_distance))
+    
+    # Standard FCW threshold for general driving (original behavior)
+    standard_fcw = model_prob > aggressive_confidence
+    
+    # Early detection for stopped/slow vehicles at long range
+    early_stopped_detection = (model_prob > early_confidence and 
+                              v_ego > 6.7 and  # We're going > 15 mph
+                              abs(self.vLead) < 0.9 and  # Lead car essentially stopped < 2 mph
+                              early_distance >= self.dRel > moderate_distance)  # Long range
+    
+    # Moderate detection for stopped/slow vehicles at medium range  
+    moderate_stopped_detection = (model_prob > moderate_confidence and
+                                 v_ego > 4.5 and  # We're going > 10 mph
+                                 abs(self.vLead) < 1.3 and  # Lead car slow < 3 mph
+                                 moderate_distance >= self.dRel > close_distance)  # Medium range
+    
+    # Close detection (original behavior maintained)
+    close_detection = (model_prob > aggressive_confidence and
+                      self.dRel <= close_distance and self.dRel > 5.0)  # Close range
+    
+    return standard_fcw or early_stopped_detection or moderate_stopped_detection or close_detection
 
   def __str__(self):
     ret = f"x: {self.dRel:4.1f}  y: {self.yRel:4.1f}  v: {self.vRel:4.1f}  a: {self.aLeadK:4.1f}"
@@ -178,7 +228,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
 
   lead_dict = {'status': False}
   if track is not None:
-    lead_dict = track.get_RadarState(CP, lead_msg.y[0], lead_msg.prob)
+    lead_dict = track.get_RadarState(CP, lead_msg.y[0], lead_msg.prob, v_ego)
   elif (track is None) and ready and (lead_msg.prob > .5):
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
@@ -189,7 +239,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
 
       # Only choose new track if it is actually closer than the previous one
       if (not lead_dict['status']) or (closest_track.dRel < lead_dict['dRel']):
-        lead_dict = closest_track.get_RadarState()
+        lead_dict = closest_track.get_RadarState(CP, 0.0, 0.0, v_ego)
 
   return lead_dict
 
