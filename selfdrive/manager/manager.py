@@ -75,6 +75,7 @@ def manager_init() -> None:
     ("GentleDecelRate", "0.5"),
     ("ModerateDecelRate", "1.5"),
     ("AggressiveDecelRate", "3.0"),
+    ("CollisionPresetMode", "Balanced"),
     
     ("FeatureStatus", "1"),
     ("HandsOnWheelMonitoring", "0"),
