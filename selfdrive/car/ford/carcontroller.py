@@ -86,6 +86,12 @@ class CarController:
     self.brake_actuate_last = 0
     self.precharge_actuate_last = 0
     self.precharge_actuate_ts = 0
+    
+    # Custom stop distance parameters
+    self.target_stop_distance = 7.0  # 7 meters target following distance when stopped
+    self.creep_speed_threshold = 1.34  # 3 MPH in m/s (2-3 MPH range)
+    self.distance_tolerance = 0.5  # Allow 0.5m tolerance before creeping
+    self.creep_accel = 0.3  # Gentle acceleration for creeping
 
     # Anti ping-pong parameters
     self.t_diffs = np.diff(ModelConstants.T_IDXS)
@@ -180,7 +186,7 @@ class CarController:
 
     self.brake_clip = self.brake_actutator_target - self.brake_actutator_stdDevLow
 
-  def update(self, CC, CS, now_nanos, model_data=None):
+  def update(self, CC, CS, now_nanos, model_data=None, radar_state=None):
     can_sends = []
 
     actuators = CC.actuators
@@ -293,6 +299,34 @@ class CarController:
       if not CC.longActive or gas < CarControllerParams.MIN_GAS:
         gas = CarControllerParams.INACTIVE_GAS
       stopping = CC.actuators.longControlState == LongCtrlState.stopping
+
+      # Custom 7m stop distance logic
+      if CC.longActive and CS.out.vEgo < self.creep_speed_threshold:
+        # Check if we have a lead car and are at low speed
+        lead_visible = hud_control.leadVisible
+        
+        if lead_visible and radar_state is not None and radar_state.leadOne.status:
+          lead_distance = radar_state.leadOne.dRel
+          
+          # Calculate distance error from target 7m
+          distance_error = lead_distance - self.target_stop_distance
+          
+          # Apply distance correction logic
+          if abs(distance_error) > self.distance_tolerance:
+            if distance_error < -self.distance_tolerance:  # Too close, need to stop/back up
+              gas = CarControllerParams.INACTIVE_GAS
+              accel = min(accel, -0.3)  # Light braking to maintain safe distance
+            elif distance_error > self.distance_tolerance:  # Too far, creep forward
+              if CS.out.vEgo < 0.2:  # Only creep if essentially stopped
+                gas = self.creep_accel
+                accel = max(accel, 0.15)  # Gentle acceleration to close gap
+        
+        elif lead_visible and CS.out.vEgo < 0.2:
+          # If we can't get exact distance but lead is visible, apply gentle creep
+          # This ensures we don't sit too far back
+          if stopping:
+            gas = max(gas, 0.05)  # Very gentle forward pressure
+            accel = max(accel, 0.02)  # Minimal acceleration
 
       precharge_actuate, brake_actuate = actuators_calc(self, accel)
       brake = accel

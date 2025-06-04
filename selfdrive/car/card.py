@@ -144,7 +144,26 @@ class CarD:
 
     # send car controls over can
     now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
-    self.last_actuators, can_sends = self.CI.apply(CC, now_nanos, model_data)
+    
+    # Check if we need to pass radar data to the car controller (for Ford's custom features)
+    if hasattr(self.CI, 'CC') and hasattr(self.CI.CC, 'update'):
+      # Try to get radar state for Ford controllers that need it
+      try:
+        # Get radar state from the same SubMaster that controlsd uses
+        from openpilot.selfdrive.controls.controlsd import Controls
+        import cereal.messaging as messaging
+        sm = messaging.SubMaster(['radarState'])
+        sm.update(0)
+        radar_state = sm['radarState'] if sm.valid.get('radarState', False) else None
+        
+        # Call with radar state if the controller supports it
+        self.last_actuators, can_sends = self.CI.apply(CC, now_nanos, model_data, radar_state)
+      except:
+        # Fallback to original method if radar data not available
+        self.last_actuators, can_sends = self.CI.apply(CC, now_nanos, model_data)
+    else:
+      self.last_actuators, can_sends = self.CI.apply(CC, now_nanos, model_data)
+      
     self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=self.CS.canValid))
 
     self.CC_prev = CC

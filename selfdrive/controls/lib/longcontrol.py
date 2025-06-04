@@ -9,7 +9,8 @@ LongCtrlState = car.CarControl.Actuators.LongControlState
 
 
 def long_control_state_trans(CP, active, long_control_state, v_ego, v_target,
-                             v_target_1sec, brake_pressed, cruise_standstill):
+                             v_target_1sec, brake_pressed, cruise_standstill, 
+                             radar_state=None):
   # Ignore cruise standstill if car has a gas interceptor
   cruise_standstill = cruise_standstill and not CP.enableGasInterceptorDEPRECATED
   accelerating = v_target_1sec > v_target
@@ -20,10 +21,19 @@ def long_control_state_trans(CP, active, long_control_state, v_ego, v_target,
                   (brake_pressed or cruise_standstill))
   stopping_condition = planned_stop or stay_stopped
 
+  # Auto re-engagement: Check if lead car is moving away
+  auto_reengage = False
+  if (radar_state is not None and radar_state.leadOne.status and 
+      v_ego < 1.0 and  # We're essentially stopped
+      radar_state.leadOne.vRel > 0.5 and  # Lead car moving away relative to us
+      radar_state.leadOne.dRel < 50.0 and  # Still following someone (within 50m)
+      not brake_pressed):  # Driver not braking
+    auto_reengage = True
+
   starting_condition = (v_target_1sec > CP.vEgoStarting and
                         accelerating and
                         not cruise_standstill and
-                        not brake_pressed)
+                        not brake_pressed) or auto_reengage
   started_condition = v_ego > CP.vEgoStarting
 
   if not active:
@@ -65,7 +75,7 @@ class LongControl:
     self.pid.reset()
     self.v_pid = v_pid
 
-  def update(self, active, CS, long_plan, accel_limits, t_since_plan):
+  def update(self, active, CS, long_plan, accel_limits, t_since_plan, radar_state=None):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     # Interp control trajectory
     speeds = long_plan.speeds
@@ -95,7 +105,7 @@ class LongControl:
     output_accel = self.last_output_accel
     self.long_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
                                                        v_target, v_target_1sec, CS.brakePressed,
-                                                       CS.cruiseState.standstill)
+                                                       CS.cruiseState.standstill, radar_state)
 
     if self.long_control_state == LongCtrlState.off:
       self.reset(CS.vEgo)

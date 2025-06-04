@@ -247,8 +247,18 @@ class CarInterfaceBase(ABC):
     self.lat_torque_nn_model, _ = get_nn_model(_car, eps_firmware)
     return self.lat_torque_nn_model is not None and self.param_s.get_bool("NNFF")
 
-  def apply(self, c: car.CarControl, now_nanos: int, model_data=None) -> tuple[car.CarControl.Actuators, list[tuple[int, int, bytes, int]]]:
-    return self.CC.update(c, self.CS, now_nanos, model_data=model_data)
+  def apply(self, c: car.CarControl, now_nanos: int, model_data=None, radar_state=None) -> tuple[car.CarControl.Actuators, list[tuple[int, int, bytes, int]]]:
+    # Check if the car controller supports radar_state parameter
+    try:
+      import inspect
+      sig = inspect.signature(self.CC.update)
+      if 'radar_state' in sig.parameters:
+        return self.CC.update(c, self.CS, now_nanos, model_data=model_data, radar_state=radar_state)
+      else:
+        return self.CC.update(c, self.CS, now_nanos, model_data=model_data)
+    except:
+      # Fallback to original method
+      return self.CC.update(c, self.CS, now_nanos, model_data=model_data)
 
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
